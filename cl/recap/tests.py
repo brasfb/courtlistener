@@ -5665,3 +5665,166 @@ class RecapFetchWebhooksTest(TestCase):
             content["payload"]["status"], PROCESSING_STATUS.SUCCESSFUL
         )
         self.assertNotEqual(content["payload"]["date_completed"], None)
+
+
+class LookupDocketsTest(TestCase):
+    """Test find_docket_object lookups work properly, avoid overwriting
+    dockets with identical docket_number_core if they are different cases.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.court = CourtFactory(id="canb", jurisdiction="FB")
+
+        cls.docket_1 = DocketFactory(
+            case_name="Young v. State",
+            docket_number="No. 3:17-CV-01477",
+            court=cls.court,
+            source=Docket.HARVARD,
+            pacer_case_id=None,
+        )
+        cls.docket_core_data = RECAPEmailDocketDataFactory(
+            case_name="Young v. State", docket_number="3:17-CV-01477"
+        )
+        cls.docket_2 = DocketFactory(
+            case_name="Young 2 v. State",
+            docket_number="212-213",
+            docket_number_core=None,
+            court=cls.court,
+            source=Docket.HARVARD,
+            pacer_case_id=None,
+        )
+        cls.docket_no_core_data = RECAPEmailDocketDataFactory(
+            case_name="Young v. State", docket_number="212-213"
+        )
+        cls.docket_case_id = DocketFactory(
+            case_name="Barton v. State",
+            docket_number="No. 3:17-mj-01477",
+            court=cls.court,
+            source=Docket.HARVARD,
+            pacer_case_id="12345",
+        )
+        cls.docket_case_id_2 = DocketFactory(
+            case_name="Barton v. State",
+            docket_number="No. 4:20-cv-01245",
+            court=cls.court,
+            source=Docket.HARVARD,
+            pacer_case_id="54321",
+        )
+        cls.docket_data = RECAPEmailDocketDataFactory(
+            case_name="Barton v. State", docket_number="3:17-mj-01477"
+        )
+
+    def test_case_id_and_docket_number_core_lookup(self):
+        """Confirm if lookup by pacer_case_id and docket_number_core works
+        properly.
+        """
+
+        d = find_docket_object(
+            self.court.pk, "12345", self.docket_data["docket_number"]
+        )
+        update_docket_metadata(d, self.docket_data)
+        d.save()
+
+        # Successful lookup, dockets matched
+        self.assertEqual(d.id, self.docket_case_id.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_case_id.docket_number_core
+        )
+
+    def test_case_id_lookup(self):
+        """Confirm if lookup by only pacer_case_id works properly."""
+
+        d = find_docket_object(
+            self.court.pk, "54321", self.docket_data["docket_number"]
+        )
+        update_docket_metadata(d, self.docket_data)
+        d.save()
+
+        # Successful lookup, dockets matched
+        self.assertEqual(d.id, self.docket_case_id_2.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_case_id_2.docket_number_core
+        )
+
+    def test_docket_number_core_lookup(self):
+        """Confirm if lookup by only docket_number_core works properly."""
+
+        d = find_docket_object(
+            self.court.pk,
+            self.docket_core_data["docket_entries"][0]["pacer_case_id"],
+            self.docket_core_data["docket_number"],
+        )
+        update_docket_metadata(d, self.docket_core_data)
+        d.save()
+
+        # Successful lookup, dockets matched
+        self.assertEqual(d.id, self.docket_1.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_1.docket_number_core
+        )
+
+    def test_docket_number_lookup(self):
+        """Confirm if lookup by only docket_number works properly."""
+
+        d = find_docket_object(
+            self.court.pk,
+            self.docket_no_core_data["docket_entries"][0]["pacer_case_id"],
+            self.docket_no_core_data["docket_number"],
+        )
+        update_docket_metadata(d, self.docket_no_core_data)
+        d.save()
+
+        # Successful lookup, dockets matched
+        self.assertEqual(d.id, self.docket_2.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_2.docket_number_core
+        )
+
+    def test_avoid_overwrite_docket_by_number_core(self):
+        """Can we avoid overwriting a docket when we got two identical
+        docket_number_core in the same court, but they are different dockets?
+        """
+
+        d = find_docket_object(
+            self.court.pk,
+            self.docket_data["docket_entries"][0]["pacer_case_id"],
+            self.docket_data["docket_number"],
+        )
+
+        update_docket_metadata(d, self.docket_data)
+        d.save()
+
+        # Docket is not overwritten a new one is created instead.
+        self.assertNotEqual(d.id, self.docket_1.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_1.docket_number_core
+        )
+
+    def test_avoid_overwrite_docket_by_number_core_multiple_results(self):
+        """Can we avoid overwriting a docket when we got multiple results for a
+        docket_number_core in the same court but they are different dockets?
+        """
+
+        DocketFactory(
+            case_name="Young v. State",
+            docket_number="No. 3:17-CV-01477",
+            court=self.court,
+            source=Docket.HARVARD,
+            pacer_case_id=None,
+        )
+
+        d = find_docket_object(
+            self.court.pk,
+            self.docket_data["docket_entries"][0]["pacer_case_id"],
+            self.docket_data["docket_number"],
+        )
+
+        update_docket_metadata(d, self.docket_data)
+        d.save()
+
+        # Docket is not overwritten a new one is created instead.
+        self.assertNotEqual(d.id, self.docket_1.id)
+        self.assertEqual(
+            d.docket_number_core, self.docket_1.docket_number_core
+        )
